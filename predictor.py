@@ -16,8 +16,44 @@ from sklearn.cross_validation import KFold
 from sklearn.ensemble import RandomForestClassifier 
 from sklearn.metrics import roc_auc_score
 import h5py
-#import xgboost as xgb
-        
+from sklearn.grid_search import GridSearchCV
+import xgboost as xgb
+from sklearn.metrics import make_scorer
+from sklearn.metrics import f1_score
+
+class XGBoostClassifier():
+    def __init__(self, num_boost_round=100, **params):
+        self.clf = None
+        self.num_boost_round = num_boost_round
+        self.params = params
+        self.params.update({'objective': 'multi:softprob'})
+ 
+    def fit(self, X, y, num_boost_round=None):
+        num_boost_round = num_boost_round or self.num_boost_round
+        self.label2num = dict((label, i) for i, label in enumerate(sorted(set(y))))
+        dtrain = xgb.DMatrix(X, label=[self.label2num[label] for label in y])
+        self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=num_boost_round)
+ 
+    def predict(self, X):
+        num2label = dict((i, label)for label, i in self.label2num.items())
+        Y = self.predict_proba(X)
+        y = np.argmax(Y, axis=1)
+        return np.array([num2label[i] for i in y])
+ 
+    def predict_proba(self, X):
+        dtest = xgb.DMatrix(X)
+        return self.clf.predict(dtest)
+ 
+    def get_params(self, deep=True):
+        return self.params
+ 
+    def set_params(self, **params):
+        if 'num_boost_round' in params:
+            self.num_boost_round = params.pop('num_boost_round')
+        if 'objective' in params:
+            del params['objective']
+        self.params.update(params)
+        return self             
 
 def getFiles(directory, extension='.mat'):
 	# Sort all the files of the directory
@@ -96,23 +132,76 @@ def ComputeGlobalScore(X, y, electrodesIndices):
 
 	return result
 
-def ComputeScore(X, y):
+def ComputeScore(NumberFiles):
+    X = None
+    y = None
+    
+    # Read data from HDFStore file 
+    with h5py.File('trainingData.h5', 'r') as hf:
+        print 'List of arrays in this file: ', hf.keys()
+        for i in range(NumberFiles):
+            group = hf.get('file_%s' % i)
+            print 'list of items in the group: ', group.items()
+            data = group.get('data')
+            subY = group.get('y')
+            if X is None:
+                X = data
+	    else:
+                X = np.concatenate((X, data), axis=0)
+            if y is None:
+                y = subY
+	    else:
+                y = np.concatenate((y, subY), axis=0)
 
-	clf = RandomForestClassifier(n_estimators = 100)	
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
-	X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
+    # Create GBT algorithm with xgboost library
+    clf = XGBoostClassifier(
+        objective = 'binary:logistic',
+        booster = 'gbtree',
+        eval_metric = 'auc',
+        tree_method = 'exact',
+        num_class = 2,
+        silent = 1,
+        seed = 42,
+        )
+    
+    parameters = {
+        'eta': [0.01, 0.015, 0.025, 0.05, 0.1],
+        'gamma': [0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
+        'max_depth': [3, 5, 7, 9, 12, 15, 17, 25],
+        'min_child_weight': [1, 3, 5, 7],
+        'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
+        'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
+        'lambda': [0.05, 0.1, 1.0],
+        'alpha': [0, 0.1, 0.5, 1.0],
+    }
 
-	clf.fit(X_train, y_train)
-	predictions = clf.predict_proba(X_test)[:, 1]
-		
-	result = roc_auc_score(y_test, predictions) 	
+    kf = KFold(len(X_train), n_folds= 10, shuffle=True, random_state=42)
 
-	return result
+    scoring_fnc = make_scorer(f1_score)
+
+    clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf)
+
+    clf.fit(X_train, y_train)
+    
+    best_parameters, score, _ = max(clf.grid_scores_, key=lambda x: x[1])
+    for param_name in sorted(best_parameters.keys()):
+        print("%s: %r" % (param_name, best_parameters[param_name]))
+            
+    prediction = clf.predict(X_test)
+            
+    result = roc_auc_score(y_test, prediction)	
+
+    return result
 
 def processData(MatFiles):
-	data = None
+        data = None
 	y = None
-
+        fileNumber = 0
+        
+        hf = h5py.File('trainingData.h5', 'w')
+        
 	# Obtain data
 	for MatFile in MatFiles:
 		try:
@@ -136,6 +225,7 @@ def processData(MatFiles):
                                 if ieegData[k][j] != 0.0:
                                     noError = 1
                             if noError != 1:
+                                print "----------Measurement error----------"
                                 for k in range(ieegData.shape[0]):
                                     ieegData[k][j] = ieegData[k][j-1]                           
                         #if np.abs(ieegData[i][j]-ieegData[i][j-1]) > 70.0:
@@ -151,47 +241,36 @@ def processData(MatFiles):
 		# Compute the FFT and normalize the result
 		ieegData = np.fft.fft(ieegData)
 		ieegData = normalize(ieegData, copy=False)
-		
-		if y is None:
-			y = subY
-		else:
-			y = np.concatenate((y, subY), axis=0)
-		if data is None:
-			data = ieegData
-		else:
-			data = np.concatenate((data, ieegData), axis=0)
 
+                # Write in HDFStore file the processed data              
+                entry = hf.create_group('file_%s' % fileNumber)
+                entry.create_dataset('data', data=ieegData)
+                entry.create_dataset('y', data=subY)               
+
+		fileNumber += 1
+		
+        hf.close()
+        
 	#print 'y_shape = ', y
 	#print 'X_shape = ', data.shape
 
 	# Convert dictionnary of data to a dataFrame
 	#new_dataFrame = pd.DataFrame(dataDict.items(), columns= ['DataNumber','Data'])
 
-	# return array of data and class 
-	#return new_dataFrame['Data'], y
-
-	return data, y
+	return fileNumber
 
 
 if __name__=="__main__":
 	bestElectrodeIndices = []
 
-	MatFiles= getFiles("init_test")
-	X, y = processData(MatFiles)
+	MatFiles= getFiles("init_1")
+	NumberFiles = processData(MatFiles)
+        
+	#bestElectrodeIndices = verifyElectrodeValue(X, y)
 
-        # Write in HDFStore file the processed data 
-        with h5py.File('data.h5', 'w') as hf:
-            hf.create_dataset('data', data=X)
-            hf.create_dataset('y', data=y)
-            hf.close()
-
-	bestElectrodeIndices = verifyElectrodeValue(X, y)
-
-	result = ComputeGlobalScore(X, y, bestElectrodeIndices)
+	#result = ComputeGlobalScore(X, y, bestElectrodeIndices)
 	#print "result with electrodes sorted : ", result
 
-	result = ComputeScore(X, y)
-	print "result with electrodes not sorted : ", result
-
-
+	#result = ComputeScore(2)
+	#print "result with electrodes not sorted : ", result
 
