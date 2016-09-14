@@ -5,11 +5,13 @@ import os
 import shutil
 import numpy as np
 import pandas as pd
+import scipy
+from scipy.stats import entropy as ent
 from scipy.io import savemat, loadmat
 from functools import partial
 from multiprocessing import Pool 
 from sklearn.preprocessing import normalize
-from scipy.signal import correlate, resample
+from scipy.signal import correlate, resample, coherence
 import matplotlib.pyplot as plt
 from sklearn.cross_validation import train_test_split
 from sklearn.cross_validation import KFold
@@ -17,9 +19,13 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 import h5py
 from sklearn.grid_search import GridSearchCV
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn.metrics import make_scorer
 from sklearn.metrics import f1_score
+#import mne
+from scipy import signal
+from scipy.signal import butter, lfilter, filtfilt, freqz
+#from joblib import Parallel, delayed
 
 class XGBoostClassifier():
     def __init__(self, num_boost_round=100, **params):
@@ -82,66 +88,16 @@ def createSubmission(score, test, prediction):
         f.write(str1)
     f.close()
 
-def verifyElectrodeValue(X, y):
-	electrode = 0
-	bestElectrodeIndices = []
-
-	clf = RandomForestClassifier(n_estimators = 100)
-
-	X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-
-	for electrode in range(16):	
-		data = []
-		globalY = []
-		i = electrode
-		while i < len(X_train):
-			data.append(X_train[i].transpose())
-			globalY.append(y_train[i])
-			i += 16
-
-		clf.fit(data, globalY)
-		predictions = clf.predict_proba(X_test)[:, 1]
-		
-		result = roc_auc_score(y_test, predictions) 
-
-		if result > 0.3:
-			bestElectrodeIndices.append(electrode)
-                        print result
-	
-	print bestElectrodeIndices	
-
-	return bestElectrodeIndices 
-
-def ComputeGlobalScore(X, y, electrodesIndices):
-	data=[]
-	globalY = []
-	clf = RandomForestClassifier(n_estimators = 100)
-
-	for electrode in electrodesIndices:
-		while electrode < len(X):
-			data.append(X[electrode].transpose())
-			globalY.append(y[electrode])
-			electrode += 16		
-
-	X_train, X_test, y_train, y_test = train_test_split(data, globalY, test_size=0.33, random_state=42)
-
-	clf.fit(X_train, y_train)
-	predictions = clf.predict_proba(X_test)[:, 1]
-		
-	result = roc_auc_score(y_test, predictions) 	
-
-	return result
-
 def ComputeScore(NumberFiles):
     X = None
     y = None
     
     # Read data from HDFStore file 
-    with h5py.File('trainingData.h5', 'r') as hf:
-        print 'List of arrays in this file: ', hf.keys()
+    with h5py.File('trainingDataT2.h5', 'r') as hf:
+        #print 'List of arrays in this file: ', hf.keys()
         for i in range(NumberFiles):
             group = hf.get('file_%s' % i)
-            print 'list of items in the group: ', group.items()
+            #print 'list of items in the group: ', group.items()
             data = group.get('data')
             subY = group.get('y')
             if X is None:
@@ -152,7 +108,23 @@ def ComputeScore(NumberFiles):
                 y = subY
 	    else:
                 y = np.concatenate((y, subY), axis=0)
+    '''
+    for i in range(32):
+        plt.subplot(16, 2, i + 1)
+        plt.plot(X[i])
+    plt.show()
+    '''
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
+    clf = RandomForestClassifier(n_estimators = 100)
+    clf.fit(X_train, y_train)
+    predictions = clf.predict_proba(X_test)[:, 1]
+		
+    result = roc_auc_score(y_test, predictions) 	
+
+    return result
+    '''
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
     # Create GBT algorithm with xgboost library
@@ -167,14 +139,14 @@ def ComputeScore(NumberFiles):
         )
     
     parameters = {
-        'eta': [0.01, 0.015, 0.025, 0.05, 0.1],
-        'gamma': [0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
-        'max_depth': [3, 5, 7, 9, 12, 15, 17, 25],
-        'min_child_weight': [1, 3, 5, 7],
-        'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
-        'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
-        'lambda': [0.05, 0.1, 1.0],
-        'alpha': [0, 0.1, 0.5, 1.0],
+        'eta': [0.015, 0.025],#[0.01, 0.015, 0.025, 0.05, 0.1],
+        'gamma': [0.1, 0.5],#[0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
+        'max_depth': [5, 9],#[3, 5, 7, 9, 12, 15, 17, 25],
+        'min_child_weight': [3, 7],#[1, 3, 5, 7],
+        'subsample': [0.7, 0.9],#[0.6, 0.7, 0.8, 0.9, 1.0],
+        'colsample_bytree': [0.7, 0.9],#[0.6, 0.7, 0.8, 0.9, 1.0],
+        'lambda': [0.1, 1.0],#[0.05, 0.1, 1.0],
+        'alpha': [0.1, 1.0],#[0, 0.1, 0.5, 1.0],
     }
 
     kf = KFold(len(X_train), n_folds= 10, shuffle=True, random_state=42)
@@ -194,20 +166,24 @@ def ComputeScore(NumberFiles):
     result = roc_auc_score(y_test, prediction)	
 
     return result
-
-def processData(MatFiles):
-        data = None
-	y = None
+    '''
+def processData(MatFiles, dataType):
         fileNumber = 0
-        
-        hf = h5py.File('trainingData.h5', 'w')
+
+        if dataType == 'training':  
+            hf = h5py.File('trainingDataT2.h5', 'w')
+        else:
+            hf = h5py.File('testingDataT2.h5', 'w')
         
 	# Obtain data
 	for MatFile in MatFiles:
+                data = None
+                y = None 
 		try:
 			d = loadmat(MatFile)
 		except ValueError as ex:
 			print(u'Error loading MAT file {}: {}'.format(os.path.basename (MatFile), str(ex)))
+			continue
 
 		# Extract each data from the file
 		datastruct = d['dataStruct']
@@ -216,46 +192,90 @@ def processData(MatFiles):
 		iEEGsamplingRate = datastruct['iEEGsamplingRate'][0][0][0][0]
 		nSamplesSegment = datastruct['nSamplesSegment'][0][0][0][0]
 		ieegData = datastruct['data'][0][0].transpose()
-		
-                # Remove measurement errors
-                for i in range(ieegData.shape[0]):
-                    for j in range(ieegData.shape[1]):
-                        if ieegData[i][j] == 0.0:
-                            for k in range(ieegData.shape[0]):
-                                if ieegData[k][j] != 0.0:
-                                    noError = 1
-                            if noError != 1:
-                                print "----------Measurement error----------"
-                                for k in range(ieegData.shape[0]):
-                                    ieegData[k][j] = ieegData[k][j-1]                           
-                        #if np.abs(ieegData[i][j]-ieegData[i][j-1]) > 70.0:
-                        #    ieegData[i][j] = ieegData[i][j-1]
 
 		# extract the class of the file
 		header = re.split(r"[_.]", os.path.basename (MatFile))
 		category = header[2]
 
-		subY = np.repeat(category, 16, axis=0)
+		subY = np.repeat(category, 24000, axis=0)
 		subY = map(int, subY)
 
-		# Compute the FFT and normalize the result
-		ieegData = np.fft.fft(ieegData)
-		ieegData = normalize(ieegData, copy=False)
+		freq = [0.5, 30]
+                b,a = butter(5, np.array(freq)/(iEEGsamplingRate/2), btype='bandpass', analog=False)
+                ieegData = np.array(signal.filtfilt(b ,a, ieegData[:16]))
+
+                # Frequency vector
+                f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/10,nSamplesSegment/10)/nSamplesSegment                 
+
+                for el in range(16):
+
+                    Y = np.fft.fft(ieegData[el])
+
+                    filtered = []
+                    b= []               # store filter coefficient
+                    cutoff = [0.5, 4.0, 7.0, 12.0, 30.0]
+
+                    for band in xrange(0, len(cutoff)-1):
+                        wl = 2*cutoff[band]/iEEGsamplingRate*np.pi
+                        wh = 2*cutoff[band+1]/iEEGsamplingRate*np.pi
+                        M = 512      # Set number of weights as 128
+                        bn = np.zeros(M)
+
+                        for i in xrange(0,M):     # Generate bandpass weighting function
+                            n = i - M/2       # Make symmetrical
+                            if n == 0:
+                                bn[i] = wh/np.pi - wl/np.pi;
+                            else:
+                                bn[i] = (np.sin(wh*n))/(np.pi*n) - (np.sin(wl*n))/(np.pi*n)   # Filter impulse response
+                        
+                        
+                        bn = bn*np.kaiser(M,5.2)  # apply Kaiser window, alpha= 5.2
+                        b.append(bn)
+
+                        [w,h]=freqz(bn,1)
+                        filtered.append(np.convolve(bn, ieegData[el])) # filter the signal by convolving the signal with filter coefficients
+                    '''
+                    plt.subplot(16, 1, el+1)
+                    plt.plot(ieegData[el])
+                    for i in xrange(0, len(filtered)):
+                        y_p = filtered[i]
+                        plt.plot(y_p[ M/2:nSamplesSegment+M/2])
+                    plt.axis('tight')
+                    plt.xlabel('Time (seconds)')
+                    '''
+                    #ax = plt.subplot(16, 1, el+1)
+                    #plt.plot(f,2*np.abs(Y[0:nSamplesSegment/10]))
+                    for i in xrange(0, len(filtered)):
+                        Y = filtered[i]
+                        Y = np.fft.fft(Y[M/2:nSamplesSegment+M/2])
+                        subData = abs(Y[0:nSamplesSegment/10])
+                        subFrame = pd.DataFrame({'%d_%d' % (el, i): subData})
+                        if data is None:
+                            data = subFrame
+                        else:
+                            data = data.join(subFrame)
+                        #plt.plot(f,subData)
+                        #plt.axis('tight')
+                        #plt.axis([0, 30, 0, 300000])
+                        #ax.set_autoscale_on(False)
+                #print data.shape     
+                #plt.legend(['delta band, 0-4 Hz','theta band, 4-7 Hz','alpha band, 7-12 Hz','beta band, 12-30 Hz'])
+                    
+                #plt.show()         
 
                 # Write in HDFStore file the processed data              
                 entry = hf.create_group('file_%s' % fileNumber)
-                entry.create_dataset('data', data=ieegData)
-                entry.create_dataset('y', data=subY)               
-
+                entry.create_dataset('data', data=data)
+                entry.create_dataset('y', data=subY)
+                
 		fileNumber += 1
 		
         hf.close()
         
-	#print 'y_shape = ', y
-	#print 'X_shape = ', data.shape
-
-	# Convert dictionnary of data to a dataFrame
-	#new_dataFrame = pd.DataFrame(dataDict.items(), columns= ['DataNumber','Data'])
+        if dataType == 'training':  
+            print 'Training done'
+        else:
+            print 'Testing done' 
 
 	return fileNumber
 
@@ -263,14 +283,11 @@ def processData(MatFiles):
 if __name__=="__main__":
 	bestElectrodeIndices = []
 
-	MatFiles= getFiles("init_1")
-	NumberFiles = processData(MatFiles)
-        
-	#bestElectrodeIndices = verifyElectrodeValue(X, y)
+	MatTrainingFiles= getFiles("train_2")
+	MatTestingFiles= getFiles("test_2")
+	NumberTrainingFiles = processData(MatTrainingFiles, 'training')
+	NumberTestingFiles = processData(MatTestingFiles, 'testing')
 
-	#result = ComputeGlobalScore(X, y, bestElectrodeIndices)
-	#print "result with electrodes sorted : ", result
-
-	#result = ComputeScore(2)
-	#print "result with electrodes not sorted : ", result
+	result = ComputeScore(NumberTrainingFiles)
+	print "result : ", result
 
