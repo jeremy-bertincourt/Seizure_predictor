@@ -284,10 +284,10 @@ if __name__=="__main__":
 	bestElectrodeIndices = []
 
 	MatTrainingFiles= getFiles("train_2")
-	MatTestingFiles= getFiles("test_2")
+	#MatTestingFiles= getFiles("test_2")
 	NumberTrainingFiles = processData(MatTrainingFiles, 'training')
-	NumberTestingFiles = processData(MatTestingFiles, 'testing')
+	#NumberTestingFiles = processData(MatTestingFiles, 'testing')
 
-	result = ComputeScore(NumberTrainingFiles)
-	print "result : ", result
+	#result = ComputeScore(NumberTrainingFiles)
+	#print "result : ", result
 
