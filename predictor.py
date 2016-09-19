@@ -6,7 +6,7 @@ import shutil
 import numpy as np
 import pandas as pd
 import scipy
-from scipy.stats import entropy as ent
+import datetime
 from scipy.io import savemat, loadmat
 from functools import partial
 from multiprocessing import Pool 
@@ -19,7 +19,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 import h5py
 from sklearn.grid_search import GridSearchCV
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn.metrics import make_scorer
 from scipy import signal
 from scipy.signal import butter, lfilter, filtfilt, freqz
@@ -84,51 +84,23 @@ def createSubmission(prediction, MatTestingFiles):
 
     # Obtain header
     for MatFile in MatTestingFiles:
-        header = re.split(r"[_.]", os.path.basename (MatFile))
-        strToWrite = str(header) + ',' + str(prediction[matNumber]) + '\n'
+        strToWrite = str(os.path.basename(MatFile)) + ',' + str(prediction[matNumber]) + '\n'
         f.write(strToWrite)
         matNumber += 1       
     f.close()
 
-def computeFinalScore(NumberTrainingFiles, NumberTestingFiles, MatTestingFiles):
-    X_train = None
-    y_train = None
-    X_test = None
+def computeFinalScore(dataLen, MatTestingFiles):
     matPrediction = []
     
     # Read data from HDFStore file 
-    with h5py.File('trainingDataT2.h5', 'r') as hf:
-        #print 'List of arrays in this file: ', hf.keys()
-        for i in range(NumberTrainingFiles):
-            group = hf.get('file_%s' % i)
-            
-            data = group.get('data')
-            data = pd.DataFrame(np.array(data), columns=np.linspace(0, data.shape[1]-1, data.shape[1]))
-            
-            subY = group.get('y')
-            subY = pd.DataFrame({'class': subY})
-                        
-            if X_train is None:
-                X_train = data
-	    else:
-                X_train = X_train.append(data, ignore_index=True)
-            if y is None:
-                y_train = subY
-	    else:
-                y_train = y_train.append(subY, ignore_index=True)
+    X_train = read_hdf('trainingDataT2.h5', 'data', stop = 500)
+    y_train = read_hdf('trainingDataT2.h5', 'y', stop = 500)
+
+    print 'training files processed'
                 
-    with h5py.File('testingDataT2.h5', 'r') as hf:
-        #print 'List of arrays in this file: ', hf.keys()
-        for i in range(NumberTestingFiles):
-            group = hf.get('file_%s' % i)
-            
-            data = group.get('data')
-            data = pd.DataFrame(np.array(data), columns=np.linspace(0, data.shape[1]-1, data.shape[1]))
-                        
-            if X_test is None:
-                X_test = data
-	    else:
-                X_test = X_test.append(data, ignore_index=True)
+    X_test = read_hdf('testingDataT2.h5', 'data')
+
+    print 'testing files processed'
 
     print 'Data loaded'
     '''
@@ -154,34 +126,34 @@ def computeFinalScore(NumberTrainingFiles, NumberTestingFiles, MatTestingFiles):
         'alpha': [0.1, 1.0],#[0, 0.1, 0.5, 1.0],
     }
     '''
-    clf = GradientBoostingClassifier(random_state = 42)
-
+    clf = RandomForestClassifier(random_state = 42, n_jobs=8)
+    '''
     parameters = {
-        'max_depth': [3, 5],
+        'max_depth': [3],
     }
-
+    
     eval_size = 0.10
     kf = StratifiedKFold(y_train, round(1. / eval_size), shuffle=True, random_state=42)
 
     scoring_fnc = make_scorer(f1_score)
 
     clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf)
-
+    '''
     clf.fit(X_train, y_train)
-    
+    '''
     best_parameters, score, _ = max(clf.grid_scores_, key=lambda x: x[1])
     for param_name in sorted(best_parameters.keys()):
         print("%s: %r" % (param_name, best_parameters[param_name]))
-            
+    '''        
     if hasattr(clf, "predict_proba"):
-        prediction = clf.predict_proba(X_test)[:, 1]
+        prediction = clf.predict_proba(X_test)
     else:  # use decision function
         prediction = clf.decision_function(X_test)
         prediction = (prediction - prediction.min()) / (prediction.max() - prediction.min())
 
     scale = 0
-    for matFile in range(NumberTestingFiles):
-        matPrediction[matFile] = np.mean(prediction[scale:scale+dataLen])
+    for matFile in range(len(MatTestingFiles)):
+        matPrediction.append(np.mean(prediction[scale:scale+dataLen]))
         if matPrediction[matFile] > 0.5:
             matPrediction[matFile] = np.amax(prediction[scale:scale+dataLen])
         elif matPrediction[matFile] < 0.5:
@@ -193,35 +165,14 @@ def computeFinalScore(NumberTrainingFiles, NumberTestingFiles, MatTestingFiles):
     createSubmission(matPrediction, MatTestingFiles)       	   
 
 
-def computeTestScore(NumberTrainingFiles):
-    X = None
-    y = None
-    
-    # Read data from HDFStore file 
-    with h5py.File('trainingDataTestBase.h5', 'r') as hf:
-        #print 'List of arrays in this file: ', hf.keys()
-        for i in range(NumberTrainingFiles):
-            group = hf.get('file_%s' % i)
-            
-            data = group.get('data')
-            data = pd.DataFrame(np.array(data), columns=np.linspace(0, data.shape[1]-1, data.shape[1]))
-            
-            subY = group.get('y')
-            subY = pd.DataFrame({'class': subY})
-                        
-            if X is None:
-                X = data
-	    else:
-                X = X.append(data, ignore_index=True)
-            if y is None:
-                y = subY
-	    else:
-                y = y.append(subY, ignore_index=True)
+def computeTestScore(NumberTrainingFiles):           
+    # Read data from HDFStore file
+    X = read_hdf('trainingDataTestBase.h5', 'data', stop = 500)
+    y = read_hdf('trainingDataTestBase.h5', 'y', stop = 500)
 
-    y = np.ravel(y)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-    
-    clf = svm.SVC(C=1)
+
+    clf = GradientBoostingClassifier(random_state = 42)
     clf.fit(X_train, y_train) 
     if hasattr(clf, "predict_proba"):
         prob_pos_clf = clf.predict_proba(X_test)[:, 1]
@@ -263,11 +214,13 @@ def computeTestScore(NumberTrainingFiles):
     '''
 def processData(MatFiles, dataType):
     fileNumber = 0
+    dataLenght = 0
+    init = 0
 
     if dataType == 'training':  
-        hf = h5py.File('trainingDataTestBase.h5', 'w')
+        hf = pd.HDFStore('trainingDataT2.h5', mode='w')
     else:
-        hf = h5py.File('trainingDataTestBase.h5', 'w')
+        hf = pd.HDFStore('testingDataT2.h5', mode='w')
     
     # Obtain data
     for MatFile in MatFiles:
@@ -294,7 +247,7 @@ def processData(MatFiles, dataType):
                 header = re.split(r"[_.]", os.path.basename (MatFile))
                 category = header[2]
                 subY = np.repeat(category, nSamplesSegment/(iEEGsamplingRate/segmentEnd), axis=0)
-                subY = map(int, subY)
+                subY = pd.DataFrame({'y': subY})
 
             # Frequency vector
             f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/(iEEGsamplingRate/segmentEnd),nSamplesSegment/(iEEGsamplingRate/segmentEnd))/nSamplesSegment                 
@@ -348,6 +301,7 @@ def processData(MatFiles, dataType):
                         data = subFrame
                     else:
                         data = data.join(subFrame)
+                        
                     #plt.plot(f,subData)
                     #plt.axis('tight')
                     #plt.axis([0, 30, 0, 300000])
@@ -357,13 +311,24 @@ def processData(MatFiles, dataType):
                 
             #plt.show()         
 
-            # Write in HDFStore file the processed data              
-            entry = hf.create_group('file_%s' % fileNumber)
-            entry.create_dataset('data', data=data)
+            # Write in HDFStore file the processed data
+            if init == 0:
+                hf.put('data', data, format='table')
+                dataLenght = data.shape[0]
+            else:
+                hf.append('data', data, format='table')
+            
             if dataType == 'training':
-                entry.create_dataset('y', data=subY)
+                if init == 0:
+                    hf.put('y', subY, format='table')
+                else:
+                    hf.append('y', subY, format='table')
             
             fileNumber += 1
+            init = 1
+            
+            if fileNumber % 10 == 0.0:
+                print '%d files done' % fileNumber
             
     hf.close()
     
@@ -372,15 +337,15 @@ def processData(MatFiles, dataType):
     else:
         print 'Testing done' 
 
-    return fileNumber
+    return fileNumber, dataLenght
 
 
 if __name__=="__main__":
-    #MatTrainingFiles= getFiles("init_train_1")
-    #MatTestingFiles= getFiles("test_2")
-    #NumberTrainingFiles = processData(MatTrainingFiles, 'training')
-    #NumberTestingFiles = processData(MatTestingFiles, 'testing')
-    
-    #computeFinalScore(2346, 2256, MatTestingFiles)
-    computeTestScore(36)
+    MatTrainingFiles= getFiles("train_2")
+    MatTestingFiles= getFiles("test_2")
+    NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
+    NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
+
+    computeFinalScore(dataTestingLenght, MatTestingFiles)
+    #computeTestScore(250)
 
