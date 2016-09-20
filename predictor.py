@@ -17,7 +17,6 @@ from sklearn.cross_validation import train_test_split
 from sklearn.cross_validation import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier 
 from sklearn.metrics import roc_auc_score
-import h5py
 from sklearn.grid_search import GridSearchCV
 #import xgboost as xgb
 from sklearn.metrics import make_scorer
@@ -63,13 +62,13 @@ class XGBoostClassifier():
         return self             
 
 def getFiles(directory, extension='.mat'):
-	# Sort all the files of the directory
+    # Sort all the files of the directory
     filenames = sorted(os.listdir(directory))
 
-	# Obtain all the files of the directory
+    # Obtain all the files of the directory
     files_with_extension = [directory + '/' + f for f in filenames if f.endswith(extension) and not f.startswith('.')]
 
-	# Return all the files of the directory
+    # Return all the files of the directory
     return files_with_extension
 
 def createSubmission(prediction, MatTestingFiles):
@@ -93,12 +92,12 @@ def computeFinalScore(dataLen, MatTestingFiles):
     matPrediction = []
     
     # Read data from HDFStore file 
-    X_train = read_hdf('trainingDataT2.h5', 'data', stop = 500)
-    y_train = read_hdf('trainingDataT2.h5', 'y', stop = 500)
+    X_train = pd.read_hdf('trainingDataT1.h5', 'data', stop = 500)
+    y_train = pd.read_hdf('trainingDataT1.h5', 'y', stop = 500)
 
     print 'training files processed'
                 
-    X_test = read_hdf('testingDataT2.h5', 'data')
+    X_test = pd.read_hdf('testingDataT1.h5', 'data')
 
     print 'testing files processed'
 
@@ -157,7 +156,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
         if matPrediction[matFile] > 0.5:
             matPrediction[matFile] = np.amax(prediction[scale:scale+dataLen])
         elif matPrediction[matFile] < 0.5:
-            matPrediction[matFile] = np.amin(prediction[scale:scale+dataLen])
+            matPrediction[matFile] = np.amin(prediction[scale:scale+dataLen]) 
         scale += dataLen
 
     print 'Creating submission file'
@@ -218,9 +217,9 @@ def processData(MatFiles, dataType):
     init = 0
 
     if dataType == 'training':  
-        hf = pd.HDFStore('trainingDataT2.h5', mode='w')
+        hf = pd.HDFStore('trainingDataT1.h5', mode='w')
     else:
-        hf = pd.HDFStore('testingDataT2.h5', mode='w')
+        hf = pd.HDFStore('testingDataT1.h5', mode='w')
     
     # Obtain data
     for MatFile in MatFiles:
@@ -341,11 +340,11 @@ def processData(MatFiles, dataType):
 
 
 if __name__=="__main__":
-    MatTrainingFiles= getFiles("train_2")
-    MatTestingFiles= getFiles("test_2")
-    NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
-    NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
+    #MatTrainingFiles= getFiles("train_1")
+    MatTestingFiles= getFiles("test_1")
+    #NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
+    #NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
 
-    computeFinalScore(dataTestingLenght, MatTestingFiles)
+    computeFinalScore(18000, MatTestingFiles)
     #computeTestScore(250)
 
