@@ -92,8 +92,8 @@ def computeFinalScore(dataLen, MatTestingFiles):
     matPrediction = []
     
     # Read data from HDFStore file 
-    X_train = pd.read_hdf('trainingDataT1.h5', 'data', stop = dataLen*500)
-    y_train = pd.read_hdf('trainingDataT1.h5', 'y', stop = dataLen*500)
+    X_train = pd.read_hdf('trainingDataT1.h5', 'data')
+    y_train = pd.read_hdf('trainingDataT1.h5', 'y')
 
     print 'X and y train read'
     
@@ -104,8 +104,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
     print 'training files processed'
                 
     X_test = pd.read_hdf('testingDataT1.h5', 'data')
-    X_test = X_test.as_matrix()
-    print X_test[0:18000].shape
+    X_test = X_test.as_matrix()   
 
     print 'testing files processed'
 
@@ -148,6 +147,10 @@ def computeFinalScore(dataLen, MatTestingFiles):
     clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf, n_jobs=-1)
     '''
     clf.fit(X_train, y_train)
+    
+    # Model with sigmoid calibration
+    clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='sigmoid')
+    clf_sigmoid.fit(X_train, y_train)
     '''
     clf = clf.best_estimator_
 
@@ -155,7 +158,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
     print 'best param for loss : ', clf.get_params()['loss']
     '''        
     if hasattr(clf, "predict_proba"):
-        prediction = clf.predict_proba(X_test)[:, 1]
+        prediction = clf_sigmoid.predict_proba(X_test)[:, 1]
     else:  # use decision function
         prediction = clf.decision_function(X_test)
         prediction = (prediction - prediction.min()) / (prediction.max() - prediction.min())
@@ -163,10 +166,12 @@ def computeFinalScore(dataLen, MatTestingFiles):
     scale = 0
     for matFile in range(len(MatTestingFiles)):
         matPrediction.append(np.mean(prediction[scale:scale+dataLen]))
+        '''
         if matPrediction[matFile] > 0.5:
             matPrediction[matFile] = np.amax(prediction[scale:scale+dataLen])
         elif matPrediction[matFile] < 0.5:
-            matPrediction[matFile] = np.amin(prediction[scale:scale+dataLen]) 
+            matPrediction[matFile] = np.amin(prediction[scale:scale+dataLen])
+        '''    
         scale += dataLen
 
     print 'Creating submission file'
@@ -176,8 +181,8 @@ def computeFinalScore(dataLen, MatTestingFiles):
 
 def computeTestScore():           
     # Read data from HDFStore file
-    X = pd.read_hdf('trainingDataT3.h5', 'data')
-    y = pd.read_hdf('trainingDataT3.h5', 'y')
+    X = pd.read_hdf('trainingDataT1.h5', 'data', stop=18000*100)
+    y = pd.read_hdf('trainingDataT1.h5', 'y', stop=18000*100)
 
     print 'X and y read'
     
@@ -193,49 +198,48 @@ def computeTestScore():
     clf.fit(X_train, y_train) 
 
     prob_pos_clf = clf.predict_proba(X_test)[:, 1]
-
-    '''
+   
     # Model with isotonic calibration
     clf_isotonic = CalibratedClassifierCV(clf, cv=2, method='isotonic')
     clf_isotonic.fit(X_train, y_train)
     prob_pos_isotonic = clf_isotonic.predict_proba(X_test)[:, 1]
 
-    # Gaussian Naive-Bayes with sigmoid calibration
+    # Model with sigmoid calibration
     clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='sigmoid')
     clf_sigmoid.fit(X_train, y_train)
     prob_pos_sigmoid = clf_sigmoid.predict_proba(X_test)[:, 1]
 
     print("Brier scores: (the smaller the better)")
 
-    clf_score = brier_score_loss(y_test, prob_pos_clf, sample_test)
+    clf_score = brier_score_loss(y_test, prob_pos_clf)
     print("No calibration: %1.3f" % clf_score)
 
-    clf_isotonic_score = brier_score_loss(y_test, prob_pos_isotonic, sample_test)
+    clf_isotonic_score = brier_score_loss(y_test, prob_pos_isotonic)
     print("With isotonic calibration: %1.3f" % clf_isotonic_score)
 
-    clf_sigmoid_score = brier_score_loss(y_test, prob_pos_sigmoid, sample_test)
+    clf_sigmoid_score = brier_score_loss(y_test, prob_pos_sigmoid)
     print("With sigmoid calibration: %1.3f" % clf_sigmoid_score)
 
     print("AUC scores:") 
-    '''
+    
     clf_auc_score = roc_auc_score(y_test, prob_pos_clf)
     print("No calibration: %1.3f" % clf_auc_score)
-    '''
+    
     clf_isotonic_auc_score = roc_auc_score(y_test, prob_pos_isotonic)
     print("With isotonic calibration: %1.3f" % clf_isotonic_auc_score)
 
     clf_sigmoid_auc_score = roc_auc_score(y_test, prob_pos_sigmoid)
     print("With sigmoid calibration: %1.3f" % clf_sigmoid_auc_score)
-    '''
+    
 def processData(MatFiles, dataType):
     fileNumber = 0
     dataLenght = 0
     init = 0
 
     if dataType == 'training':  
-        hf = pd.HDFStore('trainingDataT3test.h5', mode='w')
+        hf = pd.HDFStore('trainingDataT1.h5', mode='w')
     else:
-        hf = pd.HDFStore('testingDataT3test.h5', mode='w')
+        hf = pd.HDFStore('testingDataT1.h5', mode='w')
     
     # Obtain data
     for MatFile in MatFiles:
@@ -271,11 +275,11 @@ def processData(MatFiles, dataType):
         
         for el in range(nElectrodes):
 
-            Y = np.fft.fft(ieegData[el])
+            #Y = np.fft.fft(ieegData[el])
 
             filtered = []
             b= []               # store filter coefficient
-            cutoff = [0.001, 0.5, 3.0, 8.0, 12.0, 30.0]
+            cutoff = [0.5, 3.0, 8.0, 12.0, 30.0]
 
             for band in xrange(0, len(cutoff)-1):
                 wl = 2*cutoff[band]/iEEGsamplingRate*np.pi
@@ -290,11 +294,9 @@ def processData(MatFiles, dataType):
                     else:
                         bn[i] = (np.sin(wh*n))/(np.pi*n) - (np.sin(wl*n))/(np.pi*n)   # Filter impulse response
                 
-                
                 bn = bn*np.kaiser(M,5.2)  # apply Kaiser window, alpha= 5.2
                 b.append(bn)
 
-                [w,h]=freqz(bn,1)
                 filtered.append(np.convolve(bn, ieegData[el])) # filter the signal by convolving the signal with filter coefficients
             '''
             plt.subplot(16, 1, el+1)
@@ -304,14 +306,16 @@ def processData(MatFiles, dataType):
                 plt.plot(y_p[ M/2:nSamplesSegment+M/2])
             plt.axis('tight')
             plt.xlabel('Time (seconds)')
-            '''
+            '''            
             #ax = plt.subplot(nElectrodes, 1, el+1)
             #plt.plot(f,2*np.abs(Y[0:nSamplesSegment/(iEEGsamplingRate/segmentEnd)]))
             for i in xrange(0, len(filtered)):
+                subDataValue = []
                 Y = filtered[i]
                 Y = np.fft.fft(Y[M/2:nSamplesSegment+M/2])
                 subData = abs(Y[0:nSamplesSegment/(iEEGsamplingRate/segmentEnd)])
-                subFrame = pd.DataFrame({'%d_%d' % (el, i): subData})
+                subDataValue.append(np.max(subData))
+                subFrame = pd.DataFrame({'%d_%d' % (el, i): subDataValue})
                 if data is None:
                     data = subFrame
                 else:
@@ -357,11 +361,11 @@ def processData(MatFiles, dataType):
 
 
 if __name__=="__main__":
-    #MatTrainingFiles= getFiles("train_2")
+    MatTrainingFiles= getFiles("train_1")
     MatTestingFiles= getFiles("test_1")
-    #NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
-    #NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
-
-    computeFinalScore(18000, MatTestingFiles)
+    NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
+    NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
+    
+    computeFinalScore(dataTestingLenght, MatTestingFiles)
     #computeTestScore()
 
