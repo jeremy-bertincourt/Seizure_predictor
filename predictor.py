@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import scipy
 import datetime
+import time
 from scipy.io import savemat, loadmat
 from functools import partial
 from multiprocessing import Pool 
@@ -16,16 +17,17 @@ import matplotlib.pyplot as plt
 from sklearn.cross_validation import train_test_split
 from sklearn.cross_validation import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier 
-from sklearn.metrics import roc_auc_score
 from sklearn.grid_search import GridSearchCV
-#import xgboost as xgb
+import xgboost as xgb
 from sklearn.metrics import make_scorer
 from scipy import signal
 from scipy.signal import butter, lfilter, filtfilt, freqz
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import brier_score_loss, f1_score
+from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn import svm
 from sklearn.ensemble import GradientBoostingClassifier
+from collections import deque
+from joblib import Parallel, delayed
 
 class XGBoostClassifier():
     def __init__(self, num_boost_round=100, **params):
@@ -101,6 +103,10 @@ def computeFinalScore(dataLen, MatTestingFiles):
     y_train = np.array(y_train).ravel()
     y_train = map(int, y_train)
 
+    for i in range(20):
+        print X_train[i]
+        print y_train[i]
+
     print 'training files processed'
                 
     X_test = pd.read_hdf('testingDataT1.h5', 'data')
@@ -144,58 +150,106 @@ def computeFinalScore(dataLen, MatTestingFiles):
 
     scoring_fnc = make_scorer(f1_score)
 
-    clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf, n_jobs=-1)
+    clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf, n_jobs=-1) 
     '''
     clf.fit(X_train, y_train)
     
     # Model with sigmoid calibration
-    clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='sigmoid')
-    clf_sigmoid.fit(X_train, y_train)
+    #clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='sigmoid')
+    #clf_sigmoid.fit(X_train, y_train)
     '''
     clf = clf.best_estimator_
-
+    
     print 'best param for max_depth : ', clf.get_params()['max_depth']
     print 'best param for loss : ', clf.get_params()['loss']
     '''        
     if hasattr(clf, "predict_proba"):
-        prediction = clf_sigmoid.predict_proba(X_test)[:, 1]
+        prediction = clf.predict_proba(X_test)[:, 1]
     else:  # use decision function
         prediction = clf.decision_function(X_test)
         prediction = (prediction - prediction.min()) / (prediction.max() - prediction.min())
-
+    '''
     scale = 0
     for matFile in range(len(MatTestingFiles)):
         matPrediction.append(np.mean(prediction[scale:scale+dataLen]))
-        '''
+    
         if matPrediction[matFile] > 0.5:
             matPrediction[matFile] = np.amax(prediction[scale:scale+dataLen])
         elif matPrediction[matFile] < 0.5:
             matPrediction[matFile] = np.amin(prediction[scale:scale+dataLen])
-        '''    
+           
         scale += dataLen
-
+    '''
     print 'Creating submission file'
 
-    createSubmission(matPrediction, MatTestingFiles)       	   
+    createSubmission(prediction, MatTestingFiles)       	   
 
 
 def computeTestScore():           
     # Read data from HDFStore file
-    X = pd.read_hdf('trainingDataT1.h5', 'data', stop=18000*100)
-    y = pd.read_hdf('trainingDataT1.h5', 'y', stop=18000*100)
+    X = pd.read_hdf('trainingDataT1.h5', 'data')
+    y = pd.read_hdf('trainingDataT1.h5', 'y')
 
     print 'X and y read'
-    
+    X.drop(X.columns[[0,2,3,4]], axis=1, inplace=True)
     X = X.as_matrix()
     y = np.array(y).ravel()
     y = map(int, y)
 
-    print 'X and y processed'
+    listX0 = []
+    listX1 = []
     
+    for i in range(X.shape[0]):
+        if y[i] == 1.0:
+            listX1.append(X[i][0])
+        elif y[i] == 0.0:
+            listX0.append(X[i][0])
+
+    print 'min = %d, max=%d' % (np.amin(listX0), np.amax(listX0))
+    print np.median(listX0)
+    print 'min = %d, max=%d' % (np.amin(listX1), np.amax(listX1))
+    print np.median(listX1)
+    '''
+    print 'min = %d, max=%d' % (np.amin(X), np.amax(X))
+    print np.median(X)
+    print 'X and y processed'
+    '''
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
-    clf = RandomForestClassifier(random_state = 42, n_jobs=8)
-    clf.fit(X_train, y_train) 
+    #clf = GradientBoostingClassifier(random_state = 42)
+
+    # Create GBT algorithm with xgboost library
+    clf = XGBoostClassifier(
+        objective = 'binary:logistic',
+        booster = 'gbtree',
+        eval_metric = 'auc',
+        tree_method = 'exact',
+        num_class = 2,
+        silent = 1,
+        seed = 42,
+        )
+    
+    parameters = {
+        'eta': [0.01],#[0.01, 0.015, 0.025, 0.05, 0.1],
+        'gamma': [0.1],#[0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
+        'max_depth': [2],#[3, 5, 7, 9, 12, 15, 17, 25],
+        'min_child_weight': [1],#[1, 3, 5, 7],
+        'subsample': [0.4],#[0.6, 0.7, 0.8, 0.9, 1.0],
+        'colsample_bytree': [1.0],#[0.6, 0.7, 0.8, 0.9, 1.0],
+        'lambda': [0.1],#[0.05, 0.1, 1.0],
+        'alpha': [0.01],#[0, 0.1, 0.5, 1.0],
+    }
+
+    eval_size = 0.10
+    kf = StratifiedKFold(y_train, round(1. / eval_size), shuffle=True, random_state=42)
+
+    scoring_fnc = make_scorer(roc_auc_score)
+
+    clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf, n_jobs=-1)
+    
+    clf.fit(X_train, y_train)
+
+    clf = clf.best_estimator_
 
     prob_pos_clf = clf.predict_proba(X_test)[:, 1]
    
@@ -230,7 +284,7 @@ def computeTestScore():
 
     clf_sigmoid_auc_score = roc_auc_score(y_test, prob_pos_sigmoid)
     print("With sigmoid calibration: %1.3f" % clf_sigmoid_auc_score)
-    
+
 def processData(MatFiles, dataType):
     fileNumber = 0
     dataLenght = 0
@@ -243,8 +297,13 @@ def processData(MatFiles, dataType):
     
     # Obtain data
     for MatFile in MatFiles:
-        data = None
-        y = None 
+        y = []
+        cleanedList = []
+        ampliVarList = []
+        dataList = []
+        nSamplesSegmentList = []
+        totalDropOut = 0
+        
         try:
             d = loadmat(MatFile)
         except ValueError as ex:
@@ -258,29 +317,53 @@ def processData(MatFiles, dataType):
         nSamplesSegment = datastruct['nSamplesSegment'][0][0][0][0]
         ieegData = datastruct['data'][0][0].transpose()
 
-        segmentEnd = 30
+        cutoff = [0.5, 3.0, 8.0, 12.0, 15.0]
+        segmentEnd = cutoff[-1]
 
         # Extract labels
         if dataType == 'training': 
             # extract the class of the file
             header = re.split(r"[_.]", os.path.basename (MatFile))
             category = header[2]
-            subY = np.repeat(category, nSamplesSegment/(iEEGsamplingRate/segmentEnd), axis=0)
-            subY = pd.DataFrame({'y': subY})
+            y.append(category)
+            y = pd.DataFrame({'y': y})
 
         # Frequency vector
-        f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/(iEEGsamplingRate/segmentEnd),nSamplesSegment/(iEEGsamplingRate/segmentEnd))/nSamplesSegment                 
+        #f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/(iEEGsamplingRate/segmentEnd),nSamplesSegment/(iEEGsamplingRate/segmentEnd))/nSamplesSegment                 
 
         nElectrodes = len(channelIndices)
-        
+
+        for el in range(nElectrodes):      
+            dequeList = deque(ieegData[el])
+            for i in range(nSamplesSegment):
+                if dequeList[0] == 0 or dequeList[0] > 300:
+                    dequeList.popleft()
+                else:
+                    dequeList.rotate(-1)
+
+            cleanedList.append(dequeList)        
+            nSamplesSegmentList.append(len(dequeList))
+
+        nSamplesSegment = int(np.amin(nSamplesSegmentList)/100)*100
+
         for el in range(nElectrodes):
-
-            #Y = np.fft.fft(ieegData[el])
-
+            maxList = []
+            
+            ieegDataCleaned = np.array(cleanedList[el])
+            
+            if len(ieegDataCleaned) < 50000 and dataType == 'training':
+                totalDropOut = 1
+                print 'too much data drop outs : ', os.path.basename(MatFile)
+                break
+            
+            freq = 198.4
+            b,a = butter(5, freq/(iEEGsamplingRate/2), btype='high', analog=False)
+            ieegDataVar = np.array(signal.filtfilt(b ,a, ieegDataCleaned))
+            
+            variance = np.var(ieegDataVar, axis=0)
+            maxList.append(variance)
+            
             filtered = []
-            b= []               # store filter coefficient
-            cutoff = [0.5, 3.0, 8.0, 12.0, 30.0]
-
             for band in xrange(0, len(cutoff)-1):
                 wl = 2*cutoff[band]/iEEGsamplingRate*np.pi
                 wh = 2*cutoff[band+1]/iEEGsamplingRate*np.pi
@@ -293,59 +376,62 @@ def processData(MatFiles, dataType):
                         bn[i] = wh/np.pi - wl/np.pi;
                     else:
                         bn[i] = (np.sin(wh*n))/(np.pi*n) - (np.sin(wl*n))/(np.pi*n)   # Filter impulse response
-                
+                             
                 bn = bn*np.kaiser(M,5.2)  # apply Kaiser window, alpha= 5.2
-                b.append(bn)
-
-                filtered.append(np.convolve(bn, ieegData[el])) # filter the signal by convolving the signal with filter coefficients
+                filtered.append(np.convolve(bn, ieegDataCleaned[0:nSamplesSegment])) # filter the signal by convolving the signal with filter coefficients
             '''
             plt.subplot(16, 1, el+1)
             plt.plot(ieegData[el])
-            for i in xrange(0, len(filtered)):
-                y_p = filtered[i]
-                plt.plot(y_p[ M/2:nSamplesSegment+M/2])
+            #for i in xrange(0, len(filtered)):
+                #y_p = filtered[i]
+                #plt.plot(y_p[ M/2:nSamplesSegment+M/2])
             plt.axis('tight')
             plt.xlabel('Time (seconds)')
-            '''            
+            '''
+            
             #ax = plt.subplot(nElectrodes, 1, el+1)
             #plt.plot(f,2*np.abs(Y[0:nSamplesSegment/(iEEGsamplingRate/segmentEnd)]))
             for i in xrange(0, len(filtered)):
-                subDataValue = []
                 Y = filtered[i]
-                Y = np.fft.fft(Y[M/2:nSamplesSegment+M/2])
-                subData = abs(Y[0:nSamplesSegment/(iEEGsamplingRate/segmentEnd)])
-                subDataValue.append(np.max(subData))
-                subFrame = pd.DataFrame({'%d_%d' % (el, i): subDataValue})
-                if data is None:
-                    data = subFrame
-                else:
-                    data = data.join(subFrame)
-                    
+                Y = np.fft.fft(Y[int(M/2):int(nSamplesSegment)+int(M/2)])
+                subData = abs(Y[0:int(nSamplesSegment/(iEEGsamplingRate/segmentEnd))])
+                maxList.append(np.amax(subData))         
                 #plt.plot(f,subData)
                 #plt.axis('tight')
                 #plt.axis([0, 30, 0, 300000])
                 #ax.set_autoscale_on(False)
-        #print data.shape     
-        #plt.legend(['infra band, 0.0-0.5 Hz', 'delta band, 0.5-3 Hz','theta band, 3-8 Hz','alpha band, 8-12 Hz','beta band, 12-30 Hz'])
-            
-        #plt.show()         
+                
+            ampliVarList.append(maxList)
 
-        # Write in HDFStore file the processed data
-        if init == 0:
-            hf.put('data', data, format='table')
-            dataLenght = data.shape[0]
-            print data.shape
-        else:
-            hf.append('data', data, format='table')
+        #plt.legend(['delta band, 0.5-3 Hz','theta band, 3-8 Hz','alpha band, 8-12 Hz','beta band, 12-30 Hz'])
         
-        if dataType == 'training':
+        #print category    
+        #plt.show()
+        
+        if totalDropOut != 1:
+            data = pd.DataFrame(ampliVarList)
+
+            for band in xrange(0, len(cutoff)):
+                dataList.append(np.median(data[band]))
+
+            data = pd.DataFrame(dataList).T
+
+            # Write in HDFStore file the processed data
             if init == 0:
-                hf.put('y', subY, format='table')
+                hf.put('data', data, format='table')
+                dataLenght = data.shape[0]
+                print data.shape
             else:
-                hf.append('y', subY, format='table')
+                hf.append('data', data, format='table')
+            
+            if dataType == 'training':
+                if init == 0:
+                    hf.put('y', y, format='table')
+                else:
+                    hf.append('y', y, format='table')
+            init = 1
         
         fileNumber += 1
-        init = 1
         
         if fileNumber % 10 == 0.0:
             print '%d files done' % fileNumber
@@ -361,11 +447,10 @@ def processData(MatFiles, dataType):
 
 
 if __name__=="__main__":
-    MatTrainingFiles= getFiles("train_1")
-    MatTestingFiles= getFiles("test_1")
-    NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
-    NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
+    #MatTrainingFiles= getFiles("train_1")
+    #MatTestingFiles= getFiles("test_2")
+    #NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
+    #NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
     
-    computeFinalScore(dataTestingLenght, MatTestingFiles)
-    #computeTestScore()
-
+    #computeFinalScore(1, MatTestingFiles)
+    computeTestScore()
