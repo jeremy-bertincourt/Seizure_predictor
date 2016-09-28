@@ -4,4 +4,4 @@ This project is for 2016 Melbourne University Kaggle competition. The aim is to 
 
 ### How it works
 
-The development of the programm is only starting.
+The program uses the 4 main cerebral waves (delta to beta waves) and extracts features classified by the Xgboost library (based on GBT)
