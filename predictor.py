@@ -27,7 +27,7 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn import svm
 from sklearn.ensemble import GradientBoostingClassifier
 from collections import deque
-from joblib import Parallel, delayed
+import pywt
 
 class XGBoostClassifier():
     def __init__(self, num_boost_round=100, **params):
@@ -78,7 +78,7 @@ def createSubmission(prediction, MatTestingFiles):
     
     # Make submission file
     now = datetime.datetime.now()
-    sub_file = 'submission_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    sub_file = 'submission_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '_test300' + '.csv'
     print('Writing submission: ', sub_file)
     f = open(sub_file, 'w')
     f.write('File,Class\n')
@@ -90,7 +90,7 @@ def createSubmission(prediction, MatTestingFiles):
         matNumber += 1       
     f.close()
 
-def computeFinalScore(dataLen, MatTestingFiles):
+def computeFinalScore(MatTestingFiles):
     matPrediction = []
     
     # Read data from HDFStore file 
@@ -98,7 +98,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
     y_train = pd.read_hdf('trainingDataT1.h5', 'y')
 
     print 'X and y train read'
-    
+    X_train.drop(X_train.columns[[1,2,3]], axis=1, inplace=True)
     X_train = X_train.as_matrix()
     y_train = np.array(y_train).ravel()
     y_train = map(int, y_train)
@@ -109,7 +109,8 @@ def computeFinalScore(dataLen, MatTestingFiles):
 
     print 'training files processed'
                 
-    X_test = pd.read_hdf('testingDataT1.h5', 'data')
+    X_test = pd.read_hdf('testingDataT1300Test.h5', 'data')
+    X_test.drop(X_test.columns[[1]], axis=1, inplace=True)
     X_test = X_test.as_matrix()   
 
     print 'testing files processed'
@@ -138,7 +139,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
         'alpha': [0.1, 1.0],#[0, 0.1, 0.5, 1.0],
     }
     '''
-    clf = RandomForestClassifier(random_state = 42, n_jobs=8)
+    clf = GradientBoostingClassifier(random_state = 42)
     '''
     parameters = {
         'max_depth': [2, 3, 4],
@@ -155,8 +156,8 @@ def computeFinalScore(dataLen, MatTestingFiles):
     clf.fit(X_train, y_train)
     
     # Model with sigmoid calibration
-    #clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='sigmoid')
-    #clf_sigmoid.fit(X_train, y_train)
+    clf_sigmoid = CalibratedClassifierCV(clf, cv=2, method='isotonic')
+    clf_sigmoid.fit(X_train, y_train)
     '''
     clf = clf.best_estimator_
     
@@ -164,7 +165,7 @@ def computeFinalScore(dataLen, MatTestingFiles):
     print 'best param for loss : ', clf.get_params()['loss']
     '''        
     if hasattr(clf, "predict_proba"):
-        prediction = clf.predict_proba(X_test)[:, 1]
+        prediction = clf_sigmoid.predict_proba(X_test)[:, 1]
     else:  # use decision function
         prediction = clf.decision_function(X_test)
         prediction = (prediction - prediction.min()) / (prediction.max() - prediction.min())
@@ -191,24 +192,28 @@ def computeTestScore():
     y = pd.read_hdf('trainingDataT1.h5', 'y')
 
     print 'X and y read'
-    X.drop(X.columns[[0,2,3,4]], axis=1, inplace=True)
+
+    X.drop(X.columns[[20,21,22]], axis=1, inplace=True)
+    print X.shape
     X = X.as_matrix()
     y = np.array(y).ravel()
     y = map(int, y)
 
     listX0 = []
     listX1 = []
-    
+    '''
     for i in range(X.shape[0]):
         if y[i] == 1.0:
             listX1.append(X[i][0])
         elif y[i] == 0.0:
             listX0.append(X[i][0])
-
+    
     print 'min = %d, max=%d' % (np.amin(listX0), np.amax(listX0))
     print np.median(listX0)
     print 'min = %d, max=%d' % (np.amin(listX1), np.amax(listX1))
     print np.median(listX1)
+    print 'ratio : ', np.median(listX1)/np.median(listX0)
+    '''
     '''
     print 'min = %d, max=%d' % (np.amin(X), np.amax(X))
     print np.median(X)
@@ -217,7 +222,7 @@ def computeTestScore():
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
     #clf = GradientBoostingClassifier(random_state = 42)
-
+    
     # Create GBT algorithm with xgboost library
     clf = XGBoostClassifier(
         objective = 'binary:logistic',
@@ -232,9 +237,9 @@ def computeTestScore():
     parameters = {
         'eta': [0.01],#[0.01, 0.015, 0.025, 0.05, 0.1],
         'gamma': [0.1],#[0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
-        'max_depth': [2],#[3, 5, 7, 9, 12, 15, 17, 25],
-        'min_child_weight': [1],#[1, 3, 5, 7],
-        'subsample': [0.4],#[0.6, 0.7, 0.8, 0.9, 1.0],
+        'max_depth': [3],#[3, 5, 7, 9, 12, 15, 17, 25],
+        'min_child_weight': [3],#[1, 3, 5, 7],
+        'subsample': [0.7],#[0.6, 0.7, 0.8, 0.9, 1.0],
         'colsample_bytree': [1.0],#[0.6, 0.7, 0.8, 0.9, 1.0],
         'lambda': [0.1],#[0.05, 0.1, 1.0],
         'alpha': [0.01],#[0, 0.1, 0.5, 1.0],
@@ -248,9 +253,9 @@ def computeTestScore():
     clf = GridSearchCV(clf, parameters, scoring_fnc, cv=kf, n_jobs=-1)
     
     clf.fit(X_train, y_train)
-
+    
     clf = clf.best_estimator_
-
+    
     prob_pos_clf = clf.predict_proba(X_test)[:, 1]
    
     # Model with isotonic calibration
@@ -285,6 +290,9 @@ def computeTestScore():
     clf_sigmoid_auc_score = roc_auc_score(y_test, prob_pos_sigmoid)
     print("With sigmoid calibration: %1.3f" % clf_sigmoid_auc_score)
 
+def squareList(list):
+    return map(lambda x: x ** 2, list)
+
 def processData(MatFiles, dataType):
     fileNumber = 0
     dataLenght = 0
@@ -294,15 +302,18 @@ def processData(MatFiles, dataType):
         hf = pd.HDFStore('trainingDataT1.h5', mode='w')
     else:
         hf = pd.HDFStore('testingDataT1.h5', mode='w')
-    
+
     # Obtain data
     for MatFile in MatFiles:
         y = []
         cleanedList = []
-        ampliVarList = []
+        frequencyList = []
         dataList = []
         nSamplesSegmentList = []
         totalDropOut = 0
+
+        energyListGlob = []
+        statisticGlobList = []
         
         try:
             d = loadmat(MatFile)
@@ -317,9 +328,10 @@ def processData(MatFiles, dataType):
         nSamplesSegment = datastruct['nSamplesSegment'][0][0][0][0]
         ieegData = datastruct['data'][0][0].transpose()
 
-        cutoff = [0.5, 3.0, 8.0, 12.0, 15.0]
+        
+        cutoff = [0.001, 0.5, 3.0, 7.0, 12.0, 30.0]
         segmentEnd = cutoff[-1]
-
+        
         # Extract labels
         if dataType == 'training': 
             # extract the class of the file
@@ -330,13 +342,13 @@ def processData(MatFiles, dataType):
 
         # Frequency vector
         #f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/(iEEGsamplingRate/segmentEnd),nSamplesSegment/(iEEGsamplingRate/segmentEnd))/nSamplesSegment                 
-
+        
         nElectrodes = len(channelIndices)
-
+        
         for el in range(nElectrodes):      
             dequeList = deque(ieegData[el])
             for i in range(nSamplesSegment):
-                if dequeList[0] == 0 or dequeList[0] > 300:
+                if dequeList[0] == 0 and dequeList[0] < 300:
                     dequeList.popleft()
                 else:
                     dequeList.rotate(-1)
@@ -345,24 +357,54 @@ def processData(MatFiles, dataType):
             nSamplesSegmentList.append(len(dequeList))
 
         nSamplesSegment = int(np.amin(nSamplesSegmentList)/100)*100
-
+        
+        energyList = []
+        statisticList = []
+        
         for el in range(nElectrodes):
             maxList = []
-            
+            statListEl = []
+
+            minValue = np.amin(ieegData[el])
+            statListEl.append(minValue)
+            maxValue = np.amax(ieegData[el])
+            statListEl.append(maxValue)
+            meanValue = np.mean(ieegData[el])
+            statListEl.append(meanValue)
+            medianValue = np.median(ieegData[el])
+            statListEl.append(medianValue)
+            stdValue = np.std(ieegData[el])
+            statListEl.append(stdValue)
+            varValue = np.var(ieegData[el])
+            statListEl.append(varValue)
+
+            statisticList.append(statListEl)
+
+            coeffs = pywt.wavedec(ieegData[el], 'db1', level=17)
+
+            #f = iEEGsamplingRate*np.linspace(0,nSamplesSegment/(iEEGsamplingRate/segmentEnd),nSamplesSegment/(iEEGsamplingRate/segmentEnd))/nSamplesSegment
+
+            for i in range(len(coeffs)):
+                energy = np.sum(squareList(coeffs[i]))
+                maxList.append(energy)
+                
+            energyList.append(maxList)
+
             ieegDataCleaned = np.array(cleanedList[el])
             
-            if len(ieegDataCleaned) < 50000 and dataType == 'training':
+            if len(ieegDataCleaned) < 100 and dataType == 'training':
                 totalDropOut = 1
                 print 'too much data drop outs : ', os.path.basename(MatFile)
                 break
-            
-            freq = 198.4
-            b,a = butter(5, freq/(iEEGsamplingRate/2), btype='high', analog=False)
-            ieegDataVar = np.array(signal.filtfilt(b ,a, ieegDataCleaned))
-            
-            variance = np.var(ieegDataVar, axis=0)
-            maxList.append(variance)
-            
+
+            if len(ieegDataCleaned) < 100:
+                for el in range(nElectrodes):
+                    maxList = []
+                    for i in range(len(cutoff)-1):
+                        maxList.append(0.0)
+                    frequencyList.append(maxList)
+                break               
+
             filtered = []
             for band in xrange(0, len(cutoff)-1):
                 wl = 2*cutoff[band]/iEEGsamplingRate*np.pi
@@ -387,6 +429,7 @@ def processData(MatFiles, dataType):
                 #plt.plot(y_p[ M/2:nSamplesSegment+M/2])
             plt.axis('tight')
             plt.xlabel('Time (seconds)')
+            plt.show()
             '''
             
             #ax = plt.subplot(nElectrodes, 1, el+1)
@@ -395,26 +438,48 @@ def processData(MatFiles, dataType):
                 Y = filtered[i]
                 Y = np.fft.fft(Y[int(M/2):int(nSamplesSegment)+int(M/2)])
                 subData = abs(Y[0:int(nSamplesSegment/(iEEGsamplingRate/segmentEnd))])
-                maxList.append(np.amax(subData))         
+                maxList.append(np.median(subData))         
                 #plt.plot(f,subData)
                 #plt.axis('tight')
                 #plt.axis([0, 30, 0, 300000])
                 #ax.set_autoscale_on(False)
                 
-            ampliVarList.append(maxList)
+            frequencyList.append(maxList)
 
         #plt.legend(['delta band, 0.5-3 Hz','theta band, 3-8 Hz','alpha band, 8-12 Hz','beta band, 12-30 Hz'])
-        
+
         #print category    
         #plt.show()
         
         if totalDropOut != 1:
-            data = pd.DataFrame(ampliVarList)
+            # Gather information on statistics
+            dataStatistics = pd.DataFrame(statisticList)
 
-            for band in xrange(0, len(cutoff)):
-                dataList.append(np.median(data[band]))
+            for stat in range(len(statListEl)):
+                statisticGlobList.append(np.median(dataStatistics[stat]))
 
-            data = pd.DataFrame(dataList).T
+            dataStatistics = pd.DataFrame(statisticGlobList).T
+            dataStatistics.columns = [len(coeffs),len(coeffs)+1,len(coeffs)+2,len(coeffs)+3,len(coeffs)+4,len(coeffs)+5]
+                
+            # Gather information on energies
+            dataEnergy = pd.DataFrame(energyList)
+
+            for coeff in range(len(coeffs)):
+                energyListGlob.append(np.amax(dataEnergy[coeff]))
+
+            dataEnergy = pd.DataFrame(energyListGlob).T
+
+            dataEnergyStat = dataEnergy.join(dataStatistics)
+            
+            dataFrequency = pd.DataFrame(frequencyList)
+
+            for band in xrange(0, len(cutoff)-1):
+                dataList.append(np.amax(dataFrequency[band]))
+
+            dataFrequency = pd.DataFrame(dataList).T
+            dataFrequency.columns = [len(coeffs)+6,len(coeffs)+7,len(coeffs)+8,len(coeffs)+9,len(coeffs)+10]
+
+            data = dataEnergyStat.join(dataFrequency)
 
             # Write in HDFStore file the processed data
             if init == 0:
@@ -433,7 +498,7 @@ def processData(MatFiles, dataType):
         
         fileNumber += 1
         
-        if fileNumber % 10 == 0.0:
+        if fileNumber % 100 == 0.0:
             print '%d files done' % fileNumber
             
     hf.close()
@@ -448,9 +513,9 @@ def processData(MatFiles, dataType):
 
 if __name__=="__main__":
     #MatTrainingFiles= getFiles("train_1")
-    #MatTestingFiles= getFiles("test_2")
+    #MatTestingFiles= getFiles("test_1")
     #NumberTrainingFiles, dataTrainingLenght = processData(MatTrainingFiles, 'training')
     #NumberTestingFiles, dataTestingLenght = processData(MatTestingFiles, 'testing')
     
-    #computeFinalScore(1, MatTestingFiles)
+    #computeFinalScore(MatTestingFiles)
     computeTestScore()
